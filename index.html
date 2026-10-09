@@ -50,10 +50,10 @@
       <h1 class="page-title">Employees</h1>
       <div class="card employee-create">
         <h2 style="margin-top:0">Add Employee</h2>
-        <form id="employeeForm" class="employee-form">
+        <form id="employeeForm" class="employee-form" autocomplete="off">
           <div><label>Employee name</label><input id="employeeName" maxlength="200" required></div>
-          <div><label>Email <span class="muted">(optional)</span></label><input id="employeeEmail" type="email"></div>
-          <div><label>Last 4 SSN</label><input id="employeeLast4" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off"></div>
+          <div><label>Email <span class="muted">(optional)</span></label><input id="employeeEmail" type="text" inputmode="email" autocomplete="off" name="employee_contact_field" data-lpignore="true" data-1p-ignore="true"></div>
+          <div><label>Last 4 SSN</label><input id="employeeLast4" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off" name="employee_verification_digits" data-lpignore="true" data-1p-ignore="true" style="-webkit-text-security:disc"></div>
           <button id="createEmployeeBtn" type="submit">Create Employee</button>
         </form>
         <div id="employeeMsg" class="employee-msg"></div>
