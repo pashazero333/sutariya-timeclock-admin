@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sutariya TimeClock Admin</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root{--navy:#173f6b;--bg:#f4f6f8;--card:#fff;--text:#172033;--muted:#667085;--line:#d9e0e7;--green:#198754;--red:#c93434}
+    *{box-sizing:border-box} body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}
+    header{height:64px;background:var(--navy);color:white;display:flex;align-items:center;justify-content:space-between;padding:0 28px;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+    header strong{font-size:24px}.wrap{max-width:1180px;margin:52px auto;padding:0 24px}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;box-shadow:0 4px 18px rgba(0,0,0,.05)}
+    .login{max-width:520px;margin:80px auto}.login h1{margin:0 0 8px;font-size:32px}.login p{color:var(--muted)}label{display:block;font-weight:700;margin:18px 0 7px}input{width:100%;padding:13px;border:1px solid #b8c1cc;border-radius:8px;font-size:16px}button{border:0;border-radius:8px;padding:13px 18px;font-weight:700;font-size:16px;cursor:pointer;background:var(--navy);color:white}.login button{width:100%;margin-top:22px}.msg{display:none;margin-top:16px;padding:12px 14px;border-radius:8px}.err{display:block;background:#fff0f0;color:#8a1f1f;border:1px solid #efc1c1}.ok{display:block;background:#eef9f0;color:#175c22;border:1px solid #bfdfc5}.hidden{display:none!important}
+    .dashboard h1{font-size:38px;margin:0 0 24px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}.metric{min-height:150px}.metric .num{font-size:38px;font-weight:800;color:#1d4f80}.metric h3{margin:8px 0 6px}.muted{color:var(--muted)}.wide{grid-column:span 2}nav button{background:transparent;padding:8px 10px;font-weight:600}.status{display:inline-block;border-radius:999px;padding:4px 9px;font-size:13px;font-weight:800;background:#e9f7ef;color:#157347}
+    @media(max-width:850px){.grid{grid-template-columns:1fr 1fr}.wide{grid-column:span 2}}@media(max-width:560px){.grid{grid-template-columns:1fr}.wide{grid-column:span 1}.wrap{margin-top:28px}}
+  </style>
+</head>
+<body>
+<header><strong>TimeClock</strong><nav id="nav" class="hidden"><button id="signout">Sign out</button></nav></header>
+<div class="wrap">
+  <section id="login" class="card login">
+    <h1>Admin Login</h1>
+    <p>Sign in to Sutariya TimeClock.</p>
+    <form id="loginForm">
+      <label>Email</label><input id="email" type="email" value="pashazero@gmail.com" required autocomplete="username">
+      <label>Password</label><input id="password" type="password" required autocomplete="current-password">
+      <button type="submit">Sign In</button>
+    </form>
+    <div id="loginMsg" class="msg"></div>
+  </section>
+  <section id="app" class="dashboard hidden">
+    <h1>Dashboard</h1>
+    <div class="grid">
+      <div class="card metric"><div id="activeCount" class="num">-</div><h3>Active employees</h3><div id="activeNames" class="muted">Loading...</div></div>
+      <div class="card metric"><div id="clockedCount" class="num">-</div><h3>Currently clocked in</h3><div id="clockedNames" class="muted">Loading...</div></div>
+      <div class="card metric"><h3>Current work period</h3><div id="currentPeriod">Loading...</div></div>
+      <div class="card metric"><h3>Last completed period</h3><div id="lastPeriod">Loading...</div></div>
+      <div class="card wide"><h2>Office Hub</h2><p><span class="status">Cloud connected</span></p><div id="hubStatus" class="muted">Loading...</div></div>
+      <div class="card wide"><h2>Production Admin</h2><p>This public Admin site is connected to your Supabase login.</p><p class="muted">The remaining Employees, Time Entries, Payroll and Settings screens will be added in the next deployment step.</p></div>
+    </div>
+  </section>
+</div>
+<script>
+const SUPABASE_URL='https://ramgxfwiaboewygpoihp.supabase.co';
+const SUPABASE_KEY='sb_publishable_C3ouYOo-YoFwE4WFfeLocA_a2uDQ4aT';
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const login=document.getElementById('login'), app=document.getElementById('app'), nav=document.getElementById('nav'), msg=document.getElementById('loginMsg');
+function payrollPeriods(){const anchor=new Date('2026-10-02T12:00:00');const now=new Date();const day=24*3600*1000;const diff=Math.floor((now-anchor)/day);const blocks=Math.floor(diff/14);const lastEnd=new Date(anchor.getTime()+blocks*14*day);if(now<=lastEnd) lastEnd.setDate(lastEnd.getDate()-14);const lastStart=new Date(lastEnd);lastStart.setDate(lastStart.getDate()-13);const curStart=new Date(lastEnd);curStart.setDate(curStart.getDate()+1);const curEnd=new Date(curStart);curEnd.setDate(curEnd.getDate()+13);const fmt=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});return {current:`${fmt(curStart)} - ${fmt(curEnd)}`,last:`${fmt(lastStart)} - ${fmt(lastEnd)}`}}
+async function load(){
+ const {data:employees,error:e1}=await sb.from('employees').select('id,name,active').order('name'); if(e1) throw e1;
+ const active=employees.filter(x=>x.active); document.getElementById('activeCount').textContent=active.length;document.getElementById('activeNames').textContent=active.length?active.map(x=>x.name).join(', '):'No active employees';
+ const {data:punches,error:e2}=await sb.from('punches').select('employee_id,clock_out').is('clock_out',null); if(e2) throw e2;
+ const ids=new Set(punches.map(x=>x.employee_id));const clocked=active.filter(x=>ids.has(x.id));document.getElementById('clockedCount').textContent=clocked.length;document.getElementById('clockedNames').textContent=clocked.length?clocked.map(x=>x.name).join(', '):'No employees currently clocked in';
+ const periods=payrollPeriods();document.getElementById('currentPeriod').textContent=periods.current;document.getElementById('lastPeriod').textContent=periods.last;
+ const {data:office}=await sb.from('office_state').select('hub_name,pending_count,last_heartbeat').eq('id',1).maybeSingle();document.getElementById('hubStatus').textContent=office?`Hub: ${office.hub_name||'Office'} · Pending offline punches: ${office.pending_count||0}`:'Hub has not checked in yet.';
+}
+async function showApp(session){if(!session){login.classList.remove('hidden');app.classList.add('hidden');nav.classList.add('hidden');return}login.classList.add('hidden');app.classList.remove('hidden');nav.classList.remove('hidden');try{await load()}catch(e){app.innerHTML='<div class="card"><h2>Connected, but database access is not enabled yet.</h2><p class="muted">'+String(e.message||e)+'</p></div>'}}
+document.getElementById('loginForm').addEventListener('submit',async e=>{e.preventDefault();msg.className='msg';const {data,error}=await sb.auth.signInWithPassword({email:document.getElementById('email').value.trim(),password:document.getElementById('password').value});if(error){msg.className='msg err';msg.textContent='Invalid email or password.';return}msg.className='msg ok';msg.textContent='Signed in.';await showApp(data.session)});
+document.getElementById('signout').onclick=async()=>{await sb.auth.signOut();location.reload()};
+sb.auth.getSession().then(({data})=>showApp(data.session));
+</script>
+</body>
+</html>
