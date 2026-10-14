@@ -9,6 +9,14 @@ async function reportApi(path,body,method='GET'){
   return authFetch(REPORT_API,path,body,method);
 }
 
+function updateReportActionLabel(){
+  const btn=document.getElementById('sendReportNowBtn');
+  if(!btn||btn.disabled)return;
+  const custom=document.getElementById('timesheetRangeMode')?.value==='custom';
+  btn.textContent=custom?'Send Custom Report':'Send Payroll Report';
+}
+window.updateReportActionLabel=updateReportActionLabel;
+
 async function refreshReportRecipientLine(){
   const line=document.getElementById('reportRecipientLine');
   if(!line)return;
@@ -19,9 +27,9 @@ async function refreshReportRecipientLine(){
     const primary=String(m.payroll_email_recipient||'').trim();
     const additional=String(m.payroll_email_additional||'').trim();
     const all=[primary,additional].filter(Boolean).join(', ');
-    line.textContent=all?`Report recipient: ${all}`:'No payroll report recipient configured.';
+    line.textContent=all?`Sends to: ${all}`:'No report recipient configured.';
   }catch(e){
-    line.textContent='Unable to load report recipient.';
+    line.textContent='Unable to load recipient.';
   }
 }
 
@@ -42,7 +50,7 @@ async function refreshEmailServiceStatus(){
     }else{
       status.textContent='Not connected';
       status.className='pill amber';
-      if(sender)sender.textContent='Connect Gmail to enable Send Report Now and automatic delivery.';
+      if(sender)sender.textContent='Connect Gmail to enable report delivery.';
       if(testBtn)testBtn.disabled=true;
     }
   }catch(e){
@@ -57,19 +65,22 @@ async function generatePayrollReportNow(){
   const btn=document.getElementById('sendReportNowBtn');
   const msg=document.getElementById('sendReportMsg');
   if(!btn||!msg)return;
+  if(typeof renderPayroll==='function')renderPayroll();
   const range=typeof getTimesheetRange==='function'?getTimesheetRange():null;
   if(!range||range.end<range.start){msg.textContent='Choose a valid date range first.';return}
+  const mode=range.custom?'custom':'payroll';
+  const employeeId=typeof timesheetEmployeeId==='function'?timesheetEmployeeId():null;
   btn.disabled=true;
   btn.textContent='Sending...';
   msg.textContent='';
   try{
-    const j=await reportApi('/api/payroll/report',{start:reportDateYmd(range.start),end:reportDateYmd(range.end)},'POST');
+    const j=await reportApi('/api/payroll/report',{start:reportDateYmd(range.start),end:reportDateYmd(range.end),mode,employee_id:employeeId},'POST');
     msg.textContent=j.detail||(j.delivery_ready?'Report queued for Gmail delivery.':'Report generated.');
   }catch(e){
     msg.textContent='Error: '+String(e.message||e);
   }finally{
     btn.disabled=false;
-    btn.textContent='Send Report Now';
+    updateReportActionLabel();
   }
 }
 
@@ -92,24 +103,9 @@ async function sendTestPayrollEmail(){
 }
 
 (function initPayrollReportControls(){
-  const timesheets=document.getElementById('page-payroll');
-  const exportBtn=document.getElementById('exportCsvBtn');
-  if(timesheets&&exportBtn&&!document.getElementById('sendReportNowBtn')){
-    const btn=document.createElement('button');
-    btn.id='sendReportNowBtn';
-    btn.type='button';
-    btn.textContent='Send Report Now';
-    exportBtn.parentNode.insertBefore(btn,exportBtn);
-    btn.addEventListener('click',generatePayrollReportNow);
-
-    const filterCard=document.querySelector('.timesheet-filter-card');
-    if(filterCard){
-      const info=document.createElement('div');
-      info.style.margin='0 0 18px';
-      info.innerHTML='<span id="reportRecipientLine" class="muted">Loading report recipient...</span><span id="sendReportMsg" class="inline-msg" style="margin-left:14px"></span>';
-      filterCard.insertAdjacentElement('afterend',info);
-    }
-  }
+  const sendBtn=document.getElementById('sendReportNowBtn');
+  if(sendBtn)sendBtn.addEventListener('click',generatePayrollReportNow);
+  document.getElementById('timesheetRangeMode')?.addEventListener('change',updateReportActionLabel);
 
   const settings=document.getElementById('page-settings');
   if(settings&&!document.getElementById('emailServiceStatus')){
@@ -121,6 +117,7 @@ async function sendTestPayrollEmail(){
     document.getElementById('sendTestEmailBtn').addEventListener('click',sendTestPayrollEmail);
   }
 
+  updateReportActionLabel();
   refreshReportRecipientLine();
   refreshEmailServiceStatus();
   document.getElementById('saveSettingsBtn')?.addEventListener('click',()=>setTimeout(()=>{refreshReportRecipientLine();refreshEmailServiceStatus()},350));
