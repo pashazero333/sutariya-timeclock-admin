@@ -42,7 +42,7 @@ async function refreshEmailServiceStatus(){
     }else{
       status.textContent='Not connected';
       status.className='pill amber';
-      if(sender)sender.textContent='Connect the email service to enable Send Report Now and automatic delivery.';
+      if(sender)sender.textContent='Connect Gmail to enable Send Report Now and automatic delivery.';
       if(testBtn)testBtn.disabled=true;
     }
   }catch(e){
@@ -57,13 +57,14 @@ async function generatePayrollReportNow(){
   const btn=document.getElementById('sendReportNowBtn');
   const msg=document.getElementById('sendReportMsg');
   if(!btn||!msg)return;
-  const period=periodsList()[Number(document.getElementById('payrollPeriod').value||0)];
+  const range=typeof getTimesheetRange==='function'?getTimesheetRange():null;
+  if(!range||range.end<range.start){msg.textContent='Choose a valid date range first.';return}
   btn.disabled=true;
   btn.textContent='Sending...';
   msg.textContent='';
   try{
-    const j=await reportApi('/api/payroll/report',{start:reportDateYmd(period.start),end:reportDateYmd(period.end)},'POST');
-    msg.textContent=j.detail|| (j.delivery_ready?'Payroll report sent.':'Payroll report generated.');
+    const j=await reportApi('/api/payroll/report',{start:reportDateYmd(range.start),end:reportDateYmd(range.end)},'POST');
+    msg.textContent=j.detail||(j.delivery_ready?'Report queued for Gmail delivery.':'Report generated.');
   }catch(e){
     msg.textContent='Error: '+String(e.message||e);
   }finally{
@@ -81,7 +82,7 @@ async function sendTestPayrollEmail(){
   msg.textContent='';
   try{
     const j=await reportApi('/api/payroll/test',{},'POST');
-    msg.textContent=j.detail||'Test email sent.';
+    msg.textContent=j.detail||'Test email queued.';
   }catch(e){
     msg.textContent='Error: '+String(e.message||e);
   }finally{
@@ -91,23 +92,22 @@ async function sendTestPayrollEmail(){
 }
 
 (function initPayrollReportControls(){
-  const payroll=document.getElementById('page-payroll');
+  const timesheets=document.getElementById('page-payroll');
   const exportBtn=document.getElementById('exportCsvBtn');
-  if(payroll&&exportBtn&&!document.getElementById('sendReportNowBtn')){
+  if(timesheets&&exportBtn&&!document.getElementById('sendReportNowBtn')){
     const btn=document.createElement('button');
     btn.id='sendReportNowBtn';
     btn.type='button';
     btn.textContent='Send Report Now';
-    btn.style.marginRight='10px';
     exportBtn.parentNode.insertBefore(btn,exportBtn);
     btn.addEventListener('click',generatePayrollReportNow);
 
-    const toolbar=payroll.querySelector('.toolbar');
-    if(toolbar){
+    const filterCard=document.querySelector('.timesheet-filter-card');
+    if(filterCard){
       const info=document.createElement('div');
-      info.style.margin='-4px 0 18px';
+      info.style.margin='0 0 18px';
       info.innerHTML='<span id="reportRecipientLine" class="muted">Loading report recipient...</span><span id="sendReportMsg" class="inline-msg" style="margin-left:14px"></span>';
-      toolbar.insertAdjacentElement('afterend',info);
+      filterCard.insertAdjacentElement('afterend',info);
     }
   }
 
@@ -120,15 +120,6 @@ async function sendTestPayrollEmail(){
     settings.appendChild(card);
     document.getElementById('sendTestEmailBtn').addEventListener('click',sendTestPayrollEmail);
   }
-
-  const editNotesLabel=document.querySelector('label[for="editNotes"]');
-  if(editNotesLabel)editNotesLabel.textContent='Notes (shown with entry)';
-  const editReasonLabel=document.querySelector('label[for="editReason"]');
-  if(editReasonLabel)editReasonLabel.textContent='Reason for edit (saved in History)';
-  const editNotes=document.getElementById('editNotes');
-  const editReason=document.getElementById('editReason');
-  if(editNotes?.previousElementSibling)editNotes.previousElementSibling.textContent='Notes (shown with entry)';
-  if(editReason?.previousElementSibling)editReason.previousElementSibling.textContent='Reason for edit (saved in History)';
 
   refreshReportRecipientLine();
   refreshEmailServiceStatus();
