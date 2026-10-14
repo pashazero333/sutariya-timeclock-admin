@@ -1,20 +1,18 @@
-using System.Collections.Concurrent;
-
 namespace SutariyaTimeClock;
 
 internal sealed class MainForm : Form
 {
-    private const string HubUrl = "http://PASHA:8421";
+    private const string CloudUrl = "https://ramgxfwiaboewygpoihp.supabase.co/functions/v1/timeclock-kiosk-api";
 
-    private readonly HubClient _hub = new(HubUrl);
-    private readonly string _machineId = $"{Environment.MachineName}\\{Environment.UserName}";
+    private readonly HubClient _hub = new(CloudUrl);
+    private readonly string _machineId = Environment.MachineName;
     private readonly Dictionary<int, Button> _employeeButtons = new();
     private readonly Dictionary<int, EmployeeStatus> _statuses = new();
     private readonly List<Employee> _employees = new();
 
     private readonly FlowLayoutPanel _employeeGrid;
     private Label _clockLabel = null!;
-    private Label _hubLabel = null!;
+    private Label _connectionLabel = null!;
     private readonly Label _selectedLabel;
     private readonly Label _messageLabel;
     private readonly Button _clockInButton;
@@ -36,6 +34,7 @@ internal sealed class MainForm : Form
     private static readonly Color Muted = Color.FromArgb(102, 112, 133);
     private static readonly Color LightGreen = Color.FromArgb(233, 247, 239);
     private static readonly Color LightRed = Color.FromArgb(253, 236, 236);
+    private static readonly Color Amber = Color.FromArgb(180, 113, 0);
 
     public MainForm()
     {
@@ -64,8 +63,7 @@ internal sealed class MainForm : Form
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
         Controls.Add(outer);
 
-        var header = BuildHeader();
-        outer.Controls.Add(header, 0, 0);
+        outer.Controls.Add(BuildHeader(), 0, 0);
 
         var instruction = new Label
         {
@@ -128,7 +126,7 @@ internal sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = Muted,
             Font = new Font("Segoe UI", 10F),
-            Text = "Connecting to the office TimeClock hub..."
+            Text = "Connecting to TimeClock..."
         };
         outer.Controls.Add(_messageLabel, 0, 5);
 
@@ -220,17 +218,17 @@ internal sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleRight
         };
 
-        _hubLabel = new Label
+        _connectionLabel = new Label
         {
             Dock = DockStyle.Fill,
             ForeColor = Color.FromArgb(220, 229, 238),
             Font = new Font("Segoe UI", 9.5F),
             TextAlign = ContentAlignment.TopRight,
-            Text = "Office Hub: connecting..."
+            Text = "TimeClock: connecting..."
         };
 
         right.Controls.Add(_clockLabel, 0, 0);
-        right.Controls.Add(_hubLabel, 0, 1);
+        right.Controls.Add(_connectionLabel, 0, 1);
         layout.Controls.Add(title, 0, 0);
         layout.Controls.Add(right, 1, 0);
         card.Controls.Add(layout);
@@ -292,6 +290,24 @@ internal sealed class MainForm : Form
         _clockLabel.Text = DateTime.Now.ToString("dddd, MMMM d, yyyy   h:mm:ss tt");
     }
 
+    private void RenderConnectionState()
+    {
+        if (_hub.IsOnline)
+        {
+            _connectionLabel.Text = _hub.PendingCount > 0
+                ? $"Cloud: connected · {_hub.PendingCount} pending"
+                : "Cloud: connected";
+            _connectionLabel.ForeColor = Color.FromArgb(213, 245, 225);
+        }
+        else
+        {
+            _connectionLabel.Text = _hub.PendingCount > 0
+                ? $"Offline mode · {_hub.PendingCount} waiting to sync"
+                : "Offline mode";
+            _connectionLabel.ForeColor = Color.FromArgb(255, 226, 170);
+        }
+    }
+
     private async Task RefreshAllAsync(bool showLoading)
     {
         if (_refreshing) return;
@@ -300,44 +316,44 @@ internal sealed class MainForm : Form
         {
             if (showLoading) _messageLabel.Text = "Loading employees...";
             var employees = await _hub.GetEmployeesAsync();
-            _hubLabel.Text = "Office Hub: connected";
-            _hubLabel.ForeColor = Color.FromArgb(213, 245, 225);
+            RenderConnectionState();
 
             var selectedId = _selectedEmployee?.Id;
             _employees.Clear();
             _employees.AddRange(employees.OrderBy(e => e.Name));
             RebuildEmployeeButtons(selectedId);
 
-            var results = new ConcurrentDictionary<int, EmployeeStatus>();
-            await Task.WhenAll(_employees.Select(async employee =>
+            foreach (var employee in _employees)
             {
                 try
                 {
-                    var state = await _hub.GetStatusAsync(employee.Id);
-                    results[employee.Id] = state;
+                    _statuses[employee.Id] = await _hub.GetStatusAsync(employee.Id);
                 }
                 catch { }
-            }));
+            }
 
-            foreach (var pair in results) _statuses[pair.Key] = pair.Value;
             UpdateAllEmployeeButtons();
             RenderSelectedState();
 
             if (showLoading)
-                _messageLabel.Text = _employees.Count == 0 ? "No active employees are available." : "Select your name to begin.";
+            {
+                if (_employees.Count == 0)
+                    _messageLabel.Text = "No active employees are available.";
+                else if (_hub.IsOnline)
+                    _messageLabel.Text = "Select your name to begin.";
+                else
+                    _messageLabel.Text = "Offline mode is available. Punches will sync automatically when the Internet returns.";
+            }
         }
         catch (Exception ex)
         {
-            _hubLabel.Text = "Office Hub: unavailable";
-            _hubLabel.ForeColor = Color.FromArgb(255, 210, 210);
-            _messageLabel.Text = "This computer cannot reach the office TimeClock hub.";
-            _selectedLabel.Text = "OFFICE HUB UNAVAILABLE";
+            RenderConnectionState();
+            _messageLabel.Text = CleanError(ex.Message);
+            _selectedLabel.Text = "TIMECLOCK UNAVAILABLE";
             _selectedLabel.BackColor = Color.White;
             _selectedLabel.ForeColor = Red;
             _clockInButton.Enabled = false;
             _clockOutButton.Enabled = false;
-            if (showLoading && _employees.Count == 0)
-                _messageLabel.Text = $"Office Hub unavailable. {CleanError(ex.Message)}";
         }
         finally
         {
@@ -407,7 +423,6 @@ internal sealed class MainForm : Form
         _historyPanel.Visible = false;
         _selectedEmployee = employee;
         UpdateAllEmployeeButtons();
-        _messageLabel.Text = $"Loading {employee.Name}...";
 
         try
         {
@@ -415,7 +430,9 @@ internal sealed class MainForm : Form
             _statuses[employee.Id] = state;
             RenderSelectedState();
             UpdateAllEmployeeButtons();
-            _messageLabel.Text = "Choose Clock In or Clock Out.";
+            _messageLabel.Text = state.PendingCount > 0
+                ? $"{state.PendingCount} punch event(s) waiting to sync."
+                : "Choose Clock In or Clock Out.";
         }
         catch (Exception ex)
         {
@@ -465,7 +482,14 @@ internal sealed class MainForm : Form
         }
 
         if (state.PendingCount > 0)
+        {
             _messageLabel.Text = $"{state.PendingCount} punch event(s) waiting to sync to the cloud.";
+            _messageLabel.ForeColor = Amber;
+        }
+        else
+        {
+            _messageLabel.ForeColor = Muted;
+        }
     }
 
     private async Task PunchAsync(string action)
@@ -479,21 +503,25 @@ internal sealed class MainForm : Form
 
         SetPunchButtonsEnabled(false);
         _messageLabel.Text = "Saving punch...";
+        _messageLabel.ForeColor = Muted;
 
         try
         {
             var result = await _hub.PunchAsync(employee.Id, dialog.Last4, action, _machineId);
             var state = await _hub.GetStatusAsync(employee.Id);
             _statuses[employee.Id] = state;
+            RenderConnectionState();
             RenderSelectedState();
             UpdateAllEmployeeButtons();
             _messageLabel.Text = string.IsNullOrWhiteSpace(result.Message) ? "Punch saved." : result.Message;
+            _messageLabel.ForeColor = state.PendingCount > 0 ? Amber : Green;
             ShowHistory(employee, state.History);
             _ = RefreshAllAsync(false);
         }
         catch (Exception ex)
         {
             _messageLabel.Text = CleanError(ex.Message);
+            _messageLabel.ForeColor = Red;
             MessageBox.Show(this, CleanError(ex.Message), "TimeClock", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             RenderSelectedState();
         }
@@ -531,7 +559,7 @@ internal sealed class MainForm : Form
                 FormatHours(p.RoundedHours));
         }
 
-        _historyTitle.Text = $"{employee.Name} — last 14 days" + (rows.Count == 0 ? " (no completed history yet)" : "");
+        _historyTitle.Text = $"{employee.Name} — last 14 days" + (rows.Count == 0 ? " (no history yet)" : "");
         _historyPanel.Visible = true;
         _historyPanel.BringToFront();
         _historyTimer.Stop();
