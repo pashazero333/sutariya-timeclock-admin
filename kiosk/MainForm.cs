@@ -13,8 +13,8 @@ internal sealed class MainForm : Form
     private readonly List<Employee> _employees = new();
 
     private readonly FlowLayoutPanel _employeeGrid;
-    private readonly Label _clockLabel;
-    private readonly Label _hubLabel;
+    private Label _clockLabel = null!;
+    private Label _hubLabel = null!;
     private readonly Label _selectedLabel;
     private readonly Label _messageLabel;
     private readonly Button _clockInButton;
