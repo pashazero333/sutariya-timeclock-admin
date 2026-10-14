@@ -12,8 +12,8 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <AssemblyName>SutariyaTimeClock</AssemblyName>
     <RootNamespace>SutariyaTimeClock</RootNamespace>
-    <Version>1.1.0</Version>
-    <FileVersion>1.1.0.0</FileVersion>
+    <Version>1.1.1</Version>
+    <FileVersion>1.1.1.0</FileVersion>
     <Product>Sutariya TimeClock</Product>
     <Company>Sutariya Law</Company>
   </PropertyGroup>
