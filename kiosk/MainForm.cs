@@ -1,3 +1,5 @@
+using System.Net.NetworkInformation;
+
 namespace SutariyaTimeClock;
 
 internal sealed class MainForm : Form
@@ -23,6 +25,7 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _clockTimer;
     private readonly System.Windows.Forms.Timer _refreshTimer;
     private readonly System.Windows.Forms.Timer _historyTimer;
+    private readonly NetworkAvailabilityChangedEventHandler _networkChangedHandler;
 
     private Employee? _selectedEmployee;
     private bool _refreshing;
@@ -35,6 +38,8 @@ internal sealed class MainForm : Form
     private static readonly Color LightGreen = Color.FromArgb(233, 247, 239);
     private static readonly Color LightRed = Color.FromArgb(253, 236, 236);
     private static readonly Color Amber = Color.FromArgb(180, 113, 0);
+    private static readonly Color HeaderOnline = Color.FromArgb(93, 232, 151);
+    private static readonly Color HeaderOffline = Color.FromArgb(255, 145, 145);
 
     public MainForm()
     {
@@ -54,7 +59,7 @@ internal sealed class MainForm : Form
             RowCount = 7,
             BackColor = Page
         };
-        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
+        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
         outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
@@ -156,7 +161,7 @@ internal sealed class MainForm : Form
         _clockTimer.Start();
         UpdateClock();
 
-        _refreshTimer = new System.Windows.Forms.Timer { Interval = 30000 };
+        _refreshTimer = new System.Windows.Forms.Timer { Interval = 10000 };
         _refreshTimer.Tick += async (_, _) => await RefreshAllAsync(false);
         _refreshTimer.Start();
 
@@ -167,8 +172,23 @@ internal sealed class MainForm : Form
             _historyPanel.Visible = false;
         };
 
+        _networkChangedHandler = (_, _) =>
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try
+            {
+                BeginInvoke(new Action(async () => await RefreshAllAsync(false)));
+            }
+            catch { }
+        };
+        NetworkChange.NetworkAvailabilityChanged += _networkChangedHandler;
+
         Shown += async (_, _) => await RefreshAllAsync(true);
-        FormClosed += (_, _) => _hub.Dispose();
+        FormClosed += (_, _) =>
+        {
+            NetworkChange.NetworkAvailabilityChanged -= _networkChangedHandler;
+            _hub.Dispose();
+        };
     }
 
     private Control BuildHeader()
@@ -177,60 +197,54 @@ internal sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             BackColor = Navy,
-            Padding = new Padding(20, 10, 20, 10),
+            Padding = new Padding(20, 8, 20, 8),
             Margin = new Padding(0, 0, 0, 10)
         };
 
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
+            ColumnCount = 3,
             RowCount = 1,
-            BackColor = Navy
+            BackColor = Navy,
+            Margin = new Padding(0)
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 54));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44));
 
         var title = new Label
         {
             Text = "Sutariya TimeClock",
             Dock = DockStyle.Fill,
             ForeColor = Color.White,
-            Font = new Font("Segoe UI", 23F, FontStyle.Bold),
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-
-        var right = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            BackColor = Navy
-        };
-        right.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
-        right.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
-
-        _clockLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            ForeColor = Color.White,
-            Font = new Font("Segoe UI", 14F, FontStyle.Bold),
-            TextAlign = ContentAlignment.MiddleRight
+            Font = new Font("Segoe UI", 20F, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            Padding = new Padding(0, 0, 0, 3)
         };
 
         _connectionLabel = new Label
         {
             Dock = DockStyle.Fill,
-            ForeColor = Color.FromArgb(220, 229, 238),
-            Font = new Font("Segoe UI", 9.5F),
-            TextAlign = ContentAlignment.TopRight,
-            Text = "TimeClock: connecting..."
+            ForeColor = HeaderOffline,
+            Font = new Font("Segoe UI", 11F, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Text = "● CONNECTING"
         };
 
-        right.Controls.Add(_clockLabel, 0, 0);
-        right.Controls.Add(_connectionLabel, 0, 1);
+        _clockLabel = new Label
+        {
+            Dock = DockStyle.Fill,
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 12.5F, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleRight,
+            AutoEllipsis = true
+        };
+
         layout.Controls.Add(title, 0, 0);
-        layout.Controls.Add(right, 1, 0);
+        layout.Controls.Add(_connectionLabel, 1, 0);
+        layout.Controls.Add(_clockLabel, 2, 0);
         card.Controls.Add(layout);
         return card;
     }
@@ -294,17 +308,13 @@ internal sealed class MainForm : Form
     {
         if (_hub.IsOnline)
         {
-            _connectionLabel.Text = _hub.PendingCount > 0
-                ? $"Cloud: connected · {_hub.PendingCount} pending"
-                : "Cloud: connected";
-            _connectionLabel.ForeColor = Color.FromArgb(213, 245, 225);
+            _connectionLabel.Text = "● ONLINE";
+            _connectionLabel.ForeColor = HeaderOnline;
         }
         else
         {
-            _connectionLabel.Text = _hub.PendingCount > 0
-                ? $"Offline mode · {_hub.PendingCount} waiting to sync"
-                : "Offline mode";
-            _connectionLabel.ForeColor = Color.FromArgb(255, 226, 170);
+            _connectionLabel.Text = "● OFFLINE";
+            _connectionLabel.ForeColor = HeaderOffline;
         }
     }
 
@@ -344,11 +354,21 @@ internal sealed class MainForm : Form
                 else
                     _messageLabel.Text = "Offline mode is available. Punches will sync automatically when the Internet returns.";
             }
+            else if (_selectedEmployee is not null &&
+                     _statuses.TryGetValue(_selectedEmployee.Id, out var selectedState) &&
+                     selectedState.PendingCount == 0 &&
+                     (_messageLabel.Text.Contains("waiting to sync", StringComparison.OrdinalIgnoreCase) ||
+                      _messageLabel.Text.Contains("saved offline", StringComparison.OrdinalIgnoreCase)))
+            {
+                _messageLabel.Text = "Synced to cloud.";
+                _messageLabel.ForeColor = Green;
+            }
         }
         catch (Exception ex)
         {
             RenderConnectionState();
             _messageLabel.Text = CleanError(ex.Message);
+            _messageLabel.ForeColor = Red;
             _selectedLabel.Text = "TIMECLOCK UNAVAILABLE";
             _selectedLabel.BackColor = Color.White;
             _selectedLabel.ForeColor = Red;
@@ -433,10 +453,12 @@ internal sealed class MainForm : Form
             _messageLabel.Text = state.PendingCount > 0
                 ? $"{state.PendingCount} punch event(s) waiting to sync."
                 : "Choose Clock In or Clock Out.";
+            _messageLabel.ForeColor = state.PendingCount > 0 ? Amber : Muted;
         }
         catch (Exception ex)
         {
             _messageLabel.Text = CleanError(ex.Message);
+            _messageLabel.ForeColor = Red;
             _clockInButton.Enabled = false;
             _clockOutButton.Enabled = false;
         }
@@ -485,10 +507,6 @@ internal sealed class MainForm : Form
         {
             _messageLabel.Text = $"{state.PendingCount} punch event(s) waiting to sync to the cloud.";
             _messageLabel.ForeColor = Amber;
-        }
-        else
-        {
-            _messageLabel.ForeColor = Muted;
         }
     }
 
