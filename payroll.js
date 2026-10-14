@@ -41,11 +41,10 @@ function payrollData(){
   const rows=timesheetRows();
   const m=new Map();
   for(const p of rows){
-    if(!m.has(p.employee_id))m.set(p.employee_id,{id:p.employee_id,count:0,raw:0,rounded:0,shifts:[]});
+    if(!m.has(p.employee_id))m.set(p.employee_id,{id:p.employee_id,raw:0,rounded:0,shifts:[]});
     const x=m.get(p.employee_id);
     x.shifts.push(p);
     if(p.clock_out){
-      x.count++;
       x.raw+=Number(p.raw_hours||0);
       x.rounded+=Number(p.rounded_hours||0);
     }
@@ -58,7 +57,30 @@ function payrollDay(v){
 }
 
 function payrollTime(v){
-  return v?new Date(v).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'<span class="pill green">ACTIVE</span>';
+  return v?new Date(v).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'';
+}
+
+function isStaleOpenShift(p){
+  if(p.clock_out)return false;
+  return Date.now()-new Date(p.clock_in).getTime()>18*60*60*1000;
+}
+
+function openShiftBadge(p){
+  if(p.clock_out)return payrollTime(p.clock_out);
+  return isStaleOpenShift(p)?'<span class="pill amber">OPEN</span>':'<span class="pill green">CLOCKED IN</span>';
+}
+
+function shiftAuditBadges(p){
+  const meta=typeof punchAuditMeta==='function'?punchAuditMeta(p.id):{count:0,edits:0,manual:false};
+  const badges=[];
+  if(p.source==='admin_manual'||meta.manual)badges.push('<span class="audit-badge manual-badge">Manual</span>');
+  if(meta.edits>0)badges.push('<span class="audit-badge edited-badge">Edited</span>');
+  return badges.length?`<div class="shift-badges">${badges.join('')}</div>`:'';
+}
+
+function historyButtonLabel(p){
+  const meta=typeof punchAuditMeta==='function'?punchAuditMeta(p.id):{count:0};
+  return meta.count>0?`History (${meta.count})`:'History';
 }
 
 function togglePayrollEmployee(id){
@@ -67,7 +89,7 @@ function togglePayrollEmployee(id){
   if(!row||!btn)return;
   const opening=row.classList.contains('hidden');
   row.classList.toggle('hidden',!opening);
-  btn.textContent=(opening?'▼ ':'▶ ')+empName(id);
+  btn.querySelector('.toggle-arrow').textContent=opening?'▼':'▶';
   btn.setAttribute('aria-expanded',opening?'true':'false');
 }
 
@@ -85,7 +107,7 @@ function updateTimesheetRangeControls(){
   document.getElementById('timesheetCustomStartField')?.classList.toggle('hidden',!custom);
   document.getElementById('timesheetCustomEndField')?.classList.toggle('hidden',!custom);
   const btn=document.getElementById('loadPayroll');
-  if(btn)btn.textContent=custom?'Generate Report':'Apply';
+  if(btn)btn.textContent='Apply';
   if(custom){
     const per=selectedPeriod('payrollPeriod');
     const start=document.getElementById('timesheetCustomStart');
@@ -95,11 +117,16 @@ function updateTimesheetRangeControls(){
   }
 }
 
+function payrollPayday(end){
+  const d=new Date(end);d.setDate(d.getDate()+7);return d;
+}
+
 function timesheetRangeText(){
   const range=getTimesheetRange();
   if(!range)return 'Choose a valid start and end date.';
   const who=timesheetEmployeeId()?empName(timesheetEmployeeId()):'All employees';
-  return `${range.custom?'Custom report':'Payroll period'} · ${fmtShort(range.start)} – ${fmtShort(range.end)} · ${who}`;
+  if(range.custom)return `Custom date range · ${fmtShort(range.start)} – ${fmtShort(range.end)} · ${who}`;
+  return `Payroll period · ${fmtShort(range.start)} – ${fmtShort(range.end)} · Payday: ${fmtShort(payrollPayday(range.end))} · ${who}`;
 }
 
 function syncTimesheetVisibility(){
@@ -108,50 +135,43 @@ function syncTimesheetVisibility(){
   if(card&&page)card.style.display=page.classList.contains('active')?'':'none';
 }
 
-function hideDuplicateTimesheetSummary(){
-  const summary=document.getElementById('payrollRaw')?.closest('.card');
-  if(summary)summary.style.display='none';
-}
-
 function renderPayroll(){
   syncTimesheetEmployeeOptions();
   updateTimesheetRangeControls();
   syncTimesheetVisibility();
-  hideDuplicateTimesheetSummary();
   const range=getTimesheetRange();
   const label=document.getElementById('timesheetRangeLabel');
   if(label)label.textContent=timesheetRangeText();
-  if(range&&range.end<range.start){
-    payrollRaw.textContent='Raw 0.00 hrs';
-    payrollRounded.textContent='Rounded 0.00 hrs';
+  if(!range||range.end<range.start){
     payrollBody.innerHTML='<tr><td colspan="4" class="empty">End date must be on or after the start date.</td></tr>';
     return;
   }
   const data=payrollData();
-  const raw=data.reduce((a,x)=>a+x.raw,0);
-  const rounded=data.reduce((a,x)=>a+x.rounded,0);
-  const count=data.reduce((a,x)=>a+x.count,0);
-  payrollRaw.textContent=`Raw ${raw.toFixed(2)} hrs`;
-  payrollRounded.textContent=`Rounded ${rounded.toFixed(2)} hrs`;
   if(!data.length){
     payrollBody.innerHTML='<tr><td colspan="4" class="empty">No time entries in this date range.</td></tr>';
     return;
   }
+  const raw=data.reduce((a,x)=>a+x.raw,0);
+  const rounded=data.reduce((a,x)=>a+x.rounded,0);
+  const shifts=data.reduce((a,x)=>a+x.shifts.length,0);
   const employeeRows=data.map(x=>{
+    const open=x.shifts.filter(p=>!p.clock_out);
+    const stale=open.filter(isStaleOpenShift);
+    const statusBadge=stale.length?`<span class="pill amber employee-open-badge">${stale.length} OPEN</span>`:(open.length?'<span class="pill green employee-open-badge">CLOCKED IN</span>':'');
     const detail=x.shifts.slice().sort((a,b)=>new Date(a.clock_in)-new Date(b.clock_in)).map(p=>`
       <tr>
         <td>${payrollDay(p.clock_in)}</td>
-        <td>${payrollTime(p.clock_in)}</td>
-        <td>${payrollTime(p.clock_out)}</td>
+        <td>${payrollTime(p.clock_in)}${shiftAuditBadges(p)}</td>
+        <td>${openShiftBadge(p)}</td>
         <td>${p.clock_out?hrs(p.raw_hours):''}</td>
         <td>${p.clock_out?`<strong>${hrs(p.rounded_hours)}</strong>`:''}</td>
         <td>${p.notes||''}</td>
-        <td><div class="entry-actions"><button class="btn-small btn-secondary" type="button" onclick="openEditEntry(${p.id})">Edit</button><button class="btn-small btn-danger" type="button" onclick="deleteEntry(${p.id})">Delete</button><button class="btn-small" type="button" onclick="showEntryHistory(${p.id})">History</button></div></td>
+        <td><div class="entry-actions"><button class="btn-small btn-secondary" type="button" onclick="openEditEntry(${p.id})">Edit</button><button class="btn-small btn-danger" type="button" onclick="deleteEntry(${p.id})">Delete</button><button class="btn-small" type="button" onclick="showEntryHistory(${p.id})">${historyButtonLabel(p)}</button></div></td>
       </tr>`).join('');
     return `
       <tr>
-        <td><button id="payroll-toggle-${x.id}" class="payroll-employee-toggle" type="button" aria-expanded="false" onclick="togglePayrollEmployee(${x.id})">▶ ${empName(x.id)}</button></td>
-        <td>${x.count}</td>
+        <td><div class="employee-summary-name"><button id="payroll-toggle-${x.id}" class="payroll-employee-toggle" type="button" aria-expanded="false" onclick="togglePayrollEmployee(${x.id})"><span class="toggle-arrow">▶</span> ${empName(x.id)}</button>${statusBadge}</div></td>
+        <td>${x.shifts.length}</td>
         <td>${hrs(x.raw)}</td>
         <td><strong>${hrs(x.rounded)}</strong></td>
       </tr>
@@ -167,13 +187,20 @@ function renderPayroll(){
       </tr>`;
   }).join('');
   const totalRow=!timesheetEmployeeId()?`
-    <tr style="background:#f8fafc;border-top:2px solid var(--line)">
+    <tr class="timesheet-total-row">
       <td><strong>TOTAL</strong></td>
-      <td><strong>${count}</strong></td>
+      <td><strong>${shifts}</strong></td>
       <td><strong>${hrs(raw)}</strong></td>
       <td><strong>${hrs(rounded)}</strong></td>
     </tr>`:'';
   payrollBody.innerHTML=employeeRows+totalRow;
+  for(const x of data){
+    if(x.shifts.some(isStaleOpenShift)){
+      const row=document.getElementById('payroll-detail-'+x.id);
+      const btn=document.getElementById('payroll-toggle-'+x.id);
+      if(row&&btn){row.classList.remove('hidden');btn.querySelector('.toggle-arrow').textContent='▼';btn.setAttribute('aria-expanded','true')}
+    }
+  }
 }
 
 function csvCellTimesheet(v){return '"'+String(v??'').replace(/"/g,'""')+'"'}
@@ -182,7 +209,7 @@ function exportTimesheetCsv(){
   if(!range||range.end<range.start){alert('Choose a valid date range first.');return}
   const rows=timesheetRows().slice().sort((a,b)=>new Date(a.clock_in)-new Date(b.clock_in));
   const out=[['Employee','Day / Date','Clock In','Clock Out','Raw Hours','Rounded Hours','Notes','Source']];
-  for(const p of rows)out.push([empName(p.employee_id),payrollDay(p.clock_in),fmtDate(p.clock_in),p.clock_out?fmtDate(p.clock_out):'ACTIVE',p.clock_out?Number(p.raw_hours||0).toFixed(2):'',p.clock_out?Number(p.rounded_hours||0).toFixed(2):'',p.notes||'',p.source||'']);
+  for(const p of rows)out.push([empName(p.employee_id),payrollDay(p.clock_in),fmtDate(p.clock_in),p.clock_out?fmtDate(p.clock_out):'OPEN',p.clock_out?Number(p.raw_hours||0).toFixed(2):'',p.clock_out?Number(p.rounded_hours||0).toFixed(2):'',p.notes||'',p.source||'']);
   const blob=new Blob([out.map(r=>r.map(csvCellTimesheet).join(',')).join('\n')],{type:'text/csv'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   const who=timesheetEmployeeId()?'-'+empName(timesheetEmployeeId()).replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase():'';
@@ -203,6 +230,5 @@ function replaceTimesheetButton(id,handler){
   document.getElementById('payrollPeriod')?.addEventListener('change',()=>{if(document.getElementById('timesheetRangeMode')?.value==='period')renderPayroll()});
   document.querySelectorAll('nav button[data-page]').forEach(btn=>btn.addEventListener('click',()=>setTimeout(syncTimesheetVisibility,0)));
   updateTimesheetRangeControls();
-  hideDuplicateTimesheetSummary();
   syncTimesheetVisibility();
 })();
