@@ -5,6 +5,10 @@ function reportDateYmd(d){
   return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;
 }
 
+async function reportApi(path,body,method='GET'){
+  return authFetch(REPORT_API,path,body,method);
+}
+
 async function refreshReportRecipientLine(){
   const line=document.getElementById('reportRecipientLine');
   if(!line)return;
@@ -21,26 +25,45 @@ async function refreshReportRecipientLine(){
   }
 }
 
+async function refreshEmailServiceStatus(){
+  const status=document.getElementById('emailServiceStatus');
+  const sender=document.getElementById('emailSenderLine');
+  const testBtn=document.getElementById('sendTestEmailBtn');
+  if(!status)return;
+  status.textContent='Checking...';
+  status.className='pill amber';
+  try{
+    const j=await reportApi('/api/payroll/status',undefined,'GET');
+    if(j.email_connected){
+      status.textContent='Connected';
+      status.className='pill green';
+      if(sender)sender.textContent=j.sender_email?`Sender: ${j.sender_email}`:'Sender is configured.';
+      if(testBtn)testBtn.disabled=false;
+    }else{
+      status.textContent='Not connected';
+      status.className='pill amber';
+      if(sender)sender.textContent='Connect the email service to enable Send Report Now and automatic delivery.';
+      if(testBtn)testBtn.disabled=true;
+    }
+  }catch(e){
+    status.textContent='Unable to check';
+    status.className='pill red';
+    if(sender)sender.textContent=String(e.message||e);
+    if(testBtn)testBtn.disabled=true;
+  }
+}
+
 async function generatePayrollReportNow(){
   const btn=document.getElementById('sendReportNowBtn');
   const msg=document.getElementById('sendReportMsg');
   if(!btn||!msg)return;
   const period=periodsList()[Number(document.getElementById('payrollPeriod').value||0)];
   btn.disabled=true;
-  btn.textContent='Preparing...';
+  btn.textContent='Sending...';
   msg.textContent='';
   try{
-    const {data}=await sb.auth.getSession();
-    const token=data?.session?.access_token;
-    if(!token)throw new Error('Your admin session has expired. Sign in again.');
-    const r=await fetch(REPORT_API+'/api/payroll/report',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':SUPABASE_KEY},
-      body:JSON.stringify({start:reportDateYmd(period.start),end:reportDateYmd(period.end)})
-    });
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok||j.ok===false)throw new Error(j.detail||'Unable to prepare payroll report.');
-    msg.textContent=j.delivery_ready?'Payroll report sent.':'Payroll report is ready. Email delivery will be connected next.';
+    const j=await reportApi('/api/payroll/report',{start:reportDateYmd(period.start),end:reportDateYmd(period.end)},'POST');
+    msg.textContent=j.detail|| (j.delivery_ready?'Payroll report sent.':'Payroll report generated.');
   }catch(e){
     msg.textContent='Error: '+String(e.message||e);
   }finally{
@@ -49,26 +72,65 @@ async function generatePayrollReportNow(){
   }
 }
 
+async function sendTestPayrollEmail(){
+  const btn=document.getElementById('sendTestEmailBtn');
+  const msg=document.getElementById('emailServiceMsg');
+  if(!btn||!msg)return;
+  btn.disabled=true;
+  btn.textContent='Sending...';
+  msg.textContent='';
+  try{
+    const j=await reportApi('/api/payroll/test',{},'POST');
+    msg.textContent=j.detail||'Test email sent.';
+  }catch(e){
+    msg.textContent='Error: '+String(e.message||e);
+  }finally{
+    btn.disabled=false;
+    btn.textContent='Send Test Email';
+  }
+}
+
 (function initPayrollReportControls(){
   const payroll=document.getElementById('page-payroll');
   const exportBtn=document.getElementById('exportCsvBtn');
-  if(!payroll||!exportBtn)return;
+  if(payroll&&exportBtn&&!document.getElementById('sendReportNowBtn')){
+    const btn=document.createElement('button');
+    btn.id='sendReportNowBtn';
+    btn.type='button';
+    btn.textContent='Send Report Now';
+    btn.style.marginRight='10px';
+    exportBtn.parentNode.insertBefore(btn,exportBtn);
+    btn.addEventListener('click',generatePayrollReportNow);
 
-  const btn=document.createElement('button');
-  btn.id='sendReportNowBtn';
-  btn.type='button';
-  btn.textContent='Send Report Now';
-  btn.style.marginRight='10px';
-  exportBtn.parentNode.insertBefore(btn,exportBtn);
-  btn.addEventListener('click',generatePayrollReportNow);
-
-  const toolbar=payroll.querySelector('.toolbar');
-  if(toolbar){
-    const info=document.createElement('div');
-    info.style.margin='-4px 0 18px';
-    info.innerHTML='<span id="reportRecipientLine" class="muted">Loading report recipient...</span><span id="sendReportMsg" class="inline-msg" style="margin-left:14px"></span>';
-    toolbar.insertAdjacentElement('afterend',info);
+    const toolbar=payroll.querySelector('.toolbar');
+    if(toolbar){
+      const info=document.createElement('div');
+      info.style.margin='-4px 0 18px';
+      info.innerHTML='<span id="reportRecipientLine" class="muted">Loading report recipient...</span><span id="sendReportMsg" class="inline-msg" style="margin-left:14px"></span>';
+      toolbar.insertAdjacentElement('afterend',info);
+    }
   }
+
+  const settings=document.getElementById('page-settings');
+  if(settings&&!document.getElementById('emailServiceStatus')){
+    const card=document.createElement('div');
+    card.className='card';
+    card.style.marginTop='18px';
+    card.innerHTML='<h2 style="margin-top:0">Email Service</h2><p><span id="emailServiceStatus" class="pill amber">Checking...</span></p><p id="emailSenderLine" class="muted">Checking connection...</p><button id="sendTestEmailBtn" type="button" disabled>Send Test Email</button><span id="emailServiceMsg" class="inline-msg"></span>';
+    settings.appendChild(card);
+    document.getElementById('sendTestEmailBtn').addEventListener('click',sendTestPayrollEmail);
+  }
+
+  const editNotesLabel=document.querySelector('label[for="editNotes"]');
+  if(editNotesLabel)editNotesLabel.textContent='Notes (shown with entry)';
+  const editReasonLabel=document.querySelector('label[for="editReason"]');
+  if(editReasonLabel)editReasonLabel.textContent='Reason for edit (saved in History)';
+  const editNotes=document.getElementById('editNotes');
+  const editReason=document.getElementById('editReason');
+  if(editNotes?.previousElementSibling)editNotes.previousElementSibling.textContent='Notes (shown with entry)';
+  if(editReason?.previousElementSibling)editReason.previousElementSibling.textContent='Reason for edit (saved in History)';
+
   refreshReportRecipientLine();
-  document.getElementById('saveSettingsBtn')?.addEventListener('click',()=>setTimeout(refreshReportRecipientLine,350));
+  refreshEmailServiceStatus();
+  document.getElementById('saveSettingsBtn')?.addEventListener('click',()=>setTimeout(()=>{refreshReportRecipientLine();refreshEmailServiceStatus()},350));
 })();
