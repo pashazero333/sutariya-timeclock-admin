@@ -108,10 +108,16 @@ function syncTimesheetVisibility(){
   if(card&&page)card.style.display=page.classList.contains('active')?'':'none';
 }
 
+function hideDuplicateTimesheetSummary(){
+  const summary=document.getElementById('payrollRaw')?.closest('.card');
+  if(summary)summary.style.display='none';
+}
+
 function renderPayroll(){
   syncTimesheetEmployeeOptions();
   updateTimesheetRangeControls();
   syncTimesheetVisibility();
+  hideDuplicateTimesheetSummary();
   const range=getTimesheetRange();
   const label=document.getElementById('timesheetRangeLabel');
   if(label)label.textContent=timesheetRangeText();
@@ -124,13 +130,14 @@ function renderPayroll(){
   const data=payrollData();
   const raw=data.reduce((a,x)=>a+x.raw,0);
   const rounded=data.reduce((a,x)=>a+x.rounded,0);
+  const count=data.reduce((a,x)=>a+x.count,0);
   payrollRaw.textContent=`Raw ${raw.toFixed(2)} hrs`;
   payrollRounded.textContent=`Rounded ${rounded.toFixed(2)} hrs`;
   if(!data.length){
     payrollBody.innerHTML='<tr><td colspan="4" class="empty">No time entries in this date range.</td></tr>';
     return;
   }
-  payrollBody.innerHTML=data.map(x=>{
+  const employeeRows=data.map(x=>{
     const detail=x.shifts.slice().sort((a,b)=>new Date(a.clock_in)-new Date(b.clock_in)).map(p=>`
       <tr>
         <td>${payrollDay(p.clock_in)}</td>
@@ -159,6 +166,14 @@ function renderPayroll(){
         </td>
       </tr>`;
   }).join('');
+  const totalRow=!timesheetEmployeeId()?`
+    <tr style="background:#f8fafc;border-top:2px solid var(--line)">
+      <td><strong>TOTAL</strong></td>
+      <td><strong>${count}</strong></td>
+      <td><strong>${hrs(raw)}</strong></td>
+      <td><strong>${hrs(rounded)}</strong></td>
+    </tr>`:'';
+  payrollBody.innerHTML=employeeRows+totalRow;
 }
 
 function csvCellTimesheet(v){return '"'+String(v??'').replace(/"/g,'""')+'"'}
@@ -188,5 +203,6 @@ function replaceTimesheetButton(id,handler){
   document.getElementById('payrollPeriod')?.addEventListener('change',()=>{if(document.getElementById('timesheetRangeMode')?.value==='period')renderPayroll()});
   document.querySelectorAll('nav button[data-page]').forEach(btn=>btn.addEventListener('click',()=>setTimeout(syncTimesheetVisibility,0)));
   updateTimesheetRangeControls();
+  hideDuplicateTimesheetSummary();
   syncTimesheetVisibility();
 })();
