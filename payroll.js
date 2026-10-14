@@ -102,9 +102,16 @@ function timesheetRangeText(){
   return `${range.custom?'Custom report':'Payroll period'} · ${fmtShort(range.start)} – ${fmtShort(range.end)} · ${who}`;
 }
 
+function syncTimesheetVisibility(){
+  const card=document.getElementById('payrollBody')?.closest('.card.table-card');
+  const page=document.getElementById('page-payroll');
+  if(card&&page)card.style.display=page.classList.contains('active')?'':'none';
+}
+
 function renderPayroll(){
   syncTimesheetEmployeeOptions();
   updateTimesheetRangeControls();
+  syncTimesheetVisibility();
   const range=getTimesheetRange();
   const label=document.getElementById('timesheetRangeLabel');
   if(label)label.textContent=timesheetRangeText();
@@ -179,5 +186,7 @@ function replaceTimesheetButton(id,handler){
   document.getElementById('timesheetRangeMode')?.addEventListener('change',()=>{updateTimesheetRangeControls();renderPayroll()});
   document.getElementById('timesheetEmployee')?.addEventListener('change',renderPayroll);
   document.getElementById('payrollPeriod')?.addEventListener('change',()=>{if(document.getElementById('timesheetRangeMode')?.value==='period')renderPayroll()});
+  document.querySelectorAll('nav button[data-page]').forEach(btn=>btn.addEventListener('click',()=>setTimeout(syncTimesheetVisibility,0)));
   updateTimesheetRangeControls();
+  syncTimesheetVisibility();
 })();
