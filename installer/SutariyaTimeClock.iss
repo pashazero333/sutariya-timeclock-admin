@@ -1,5 +1,5 @@
 #define MyAppName "Sutariya TimeClock"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.1.2"
 #define MyAppPublisher "Sutariya Law"
 #define MyAppExeName "SutariyaTimeClock.exe"
 
