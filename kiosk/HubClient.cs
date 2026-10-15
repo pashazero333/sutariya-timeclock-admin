@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,7 +10,10 @@ namespace SutariyaTimeClock;
 internal sealed class HubClient : IDisposable
 {
     private const int RoundingMinutes = 5;
-    private const string AppVersion = "1.1.0";
+    private const string AppVersion = "1.1.2";
+
+    private static readonly TimeZoneInfo OfficeTimeZone =
+        TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     private readonly HttpClient _http;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web)
@@ -18,16 +22,21 @@ internal sealed class HubClient : IDisposable
         WriteIndented = false
     };
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _timeGate = new();
     private readonly string _machineId = Environment.MachineName;
     private readonly string _machineName = Environment.MachineName;
     private readonly string _dataDir;
     private readonly string _cachePath;
     private readonly string _queuePath;
     private readonly string _devicePath;
+    private readonly string _trustedTimePath;
 
     private CacheEnvelope _cache;
     private List<QueuedEvent> _queue;
     private DeviceRegistration _device;
+    private TrustedTimeState _trustedTimeState;
+    private DateTimeOffset? _trustedUtcAnchor;
+    private long _trustedAnchorTimestamp;
 
     public bool IsOnline { get; private set; }
     public int PendingCount => _queue.Count;
@@ -48,11 +57,43 @@ internal sealed class HubClient : IDisposable
         _cachePath = Path.Combine(_dataDir, "employee_cache.json");
         _queuePath = Path.Combine(_dataDir, "queue.json");
         _devicePath = Path.Combine(_dataDir, "device.json");
+        _trustedTimePath = Path.Combine(_dataDir, "trusted_time.json");
 
         _cache = LoadFile(_cachePath, new CacheEnvelope());
         _queue = LoadFile(_queuePath, new List<QueuedEvent>());
         _device = LoadFile(_devicePath, new DeviceRegistration());
+        _trustedTimeState = LoadFile(_trustedTimePath, new TrustedTimeState());
+        RestoreTrustedClock();
     }
+
+    public DateTimeOffset GetTrustedUtcNow()
+    {
+        lock (_timeGate)
+        {
+            if (_trustedUtcAnchor.HasValue)
+            {
+                var elapsed = Stopwatch.GetElapsedTime(_trustedAnchorTimestamp);
+                return _trustedUtcAnchor.Value.Add(elapsed);
+            }
+
+            if (_trustedTimeState.ServerUtc.HasValue && _trustedTimeState.ClientUtcAtSync.HasValue)
+            {
+                var offset = _trustedTimeState.ServerUtc.Value.ToUniversalTime()
+                    - _trustedTimeState.ClientUtcAtSync.Value.ToUniversalTime();
+                return DateTimeOffset.UtcNow.Add(offset);
+            }
+
+            // First-ever offline launch has no trusted cloud anchor yet.
+            // As soon as the kiosk reaches Supabase, future time is cloud-corrected.
+            return DateTimeOffset.UtcNow;
+        }
+    }
+
+    public DateTimeOffset GetOfficeNow()
+        => ToOfficeTime(GetTrustedUtcNow());
+
+    public DateTimeOffset ToOfficeTime(DateTimeOffset value)
+        => TimeZoneInfo.ConvertTime(value.ToUniversalTime(), OfficeTimeZone);
 
     public async Task<IReadOnlyList<Employee>> GetEmployeesAsync(CancellationToken cancellationToken = default)
     {
@@ -114,7 +155,7 @@ internal sealed class HubClient : IDisposable
                 EventId = Guid.NewGuid().ToString(),
                 EmployeeId = employeeId,
                 Action = action,
-                OccurredAt = DateTimeOffset.UtcNow,
+                OccurredAt = GetTrustedUtcNow().ToUniversalTime(),
                 MachineId = _machineId
             });
             SaveFileAtomic(_queuePath, _queue);
@@ -166,7 +207,7 @@ internal sealed class HubClient : IDisposable
                         event_id = e.EventId,
                         employee_id = e.EmployeeId,
                         action = e.Action,
-                        occurred_at = e.OccurredAt.ToString("O"),
+                        occurred_at = e.OccurredAt.ToUniversalTime().ToString("O"),
                         machine_id = _machineId
                     }),
                     machine_name = _machineName,
@@ -186,6 +227,11 @@ internal sealed class HubClient : IDisposable
             var configText = await configResponse.Content.ReadAsStringAsync(cancellationToken);
             EnsureSuccess(configResponse, configText);
             var fresh = JsonSerializer.Deserialize<CacheEnvelope>(configText, _json) ?? new CacheEnvelope();
+
+            // generated_at is created by the Supabase Edge Function itself, so this
+            // anchors the kiosk to cloud UTC rather than the employee PC's clock.
+            if (fresh.GeneratedAt.HasValue)
+                UpdateTrustedClock(fresh.GeneratedAt.Value);
 
             await _gate.WaitAsync(cancellationToken);
             try
@@ -307,7 +353,7 @@ internal sealed class HubClient : IDisposable
             }
         }
 
-        var cutoff = DateTimeOffset.UtcNow.AddDays(-14);
+        var cutoff = GetTrustedUtcNow().AddDays(-14);
         var history = rows
             .Where(p => p.ClockIn.HasValue && p.ClockIn.Value >= cutoff)
             .OrderByDescending(p => p.ClockIn)
@@ -315,6 +361,37 @@ internal sealed class HubClient : IDisposable
             .ToList();
 
         return new EmployeeStatus(clockedIn, pending.Count, history);
+    }
+
+    private void RestoreTrustedClock()
+    {
+        lock (_timeGate)
+        {
+            if (!_trustedTimeState.ServerUtc.HasValue || !_trustedTimeState.ClientUtcAtSync.HasValue)
+                return;
+
+            var offset = _trustedTimeState.ServerUtc.Value.ToUniversalTime()
+                - _trustedTimeState.ClientUtcAtSync.Value.ToUniversalTime();
+            _trustedUtcAnchor = DateTimeOffset.UtcNow.Add(offset);
+            _trustedAnchorTimestamp = Stopwatch.GetTimestamp();
+        }
+    }
+
+    private void UpdateTrustedClock(DateTimeOffset serverTime)
+    {
+        lock (_timeGate)
+        {
+            var clientUtc = DateTimeOffset.UtcNow;
+            var serverUtc = serverTime.ToUniversalTime();
+            _trustedUtcAnchor = serverUtc;
+            _trustedAnchorTimestamp = Stopwatch.GetTimestamp();
+            _trustedTimeState = new TrustedTimeState
+            {
+                ServerUtc = serverUtc,
+                ClientUtcAtSync = clientUtc
+            };
+            SaveFileAtomic(_trustedTimePath, _trustedTimeState);
+        }
     }
 
     private CachedEmployee? FindEmployee(int employeeId)
@@ -475,6 +552,15 @@ internal sealed class HubClient : IDisposable
     {
         [JsonPropertyName("accepted")]
         public List<string> Accepted { get; set; } = new();
+    }
+
+    private sealed class TrustedTimeState
+    {
+        [JsonPropertyName("server_utc")]
+        public DateTimeOffset? ServerUtc { get; set; }
+
+        [JsonPropertyName("client_utc_at_sync")]
+        public DateTimeOffset? ClientUtcAtSync { get; set; }
     }
 
     private sealed class WorkingPunch
