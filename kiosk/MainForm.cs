@@ -301,7 +301,9 @@ internal sealed class MainForm : Form
 
     private void UpdateClock()
     {
-        _clockLabel.Text = DateTime.Now.ToString("dddd, MMMM d, yyyy   h:mm:ss tt");
+        // Always show Sutariya Law's office time from the cloud-synchronized clock,
+        // never the employee PC's local time zone setting.
+        _clockLabel.Text = _hub.GetOfficeNow().ToString("dddd, MMMM d, yyyy   h:mm:ss tt");
     }
 
     private void RenderConnectionState()
@@ -327,6 +329,7 @@ internal sealed class MainForm : Form
             if (showLoading) _messageLabel.Text = "Loading employees...";
             var employees = await _hub.GetEmployeesAsync();
             RenderConnectionState();
+            UpdateClock();
 
             var selectedId = _selectedEmployee?.Id;
             _employees.Clear();
@@ -529,6 +532,7 @@ internal sealed class MainForm : Form
             var state = await _hub.GetStatusAsync(employee.Id);
             _statuses[employee.Id] = state;
             RenderConnectionState();
+            UpdateClock();
             RenderSelectedState();
             UpdateAllEmployeeButtons();
             _messageLabel.Text = string.IsNullOrWhiteSpace(result.Message) ? "Punch saved." : result.Message;
@@ -559,7 +563,7 @@ internal sealed class MainForm : Form
     private void ShowHistory(Employee employee, IReadOnlyList<PunchHistory> history)
     {
         _historyGrid.Rows.Clear();
-        var cutoff = DateTimeOffset.Now.AddDays(-14);
+        var cutoff = _hub.GetTrustedUtcNow().AddDays(-14);
         var rows = history
             .Where(p => p.ClockIn.HasValue && p.ClockIn.Value >= cutoff)
             .OrderByDescending(p => p.ClockIn)
@@ -567,12 +571,12 @@ internal sealed class MainForm : Form
 
         foreach (var p in rows)
         {
-            var localIn = p.ClockIn?.LocalDateTime;
-            var localOut = p.ClockOut?.LocalDateTime;
+            DateTimeOffset? officeIn = p.ClockIn.HasValue ? _hub.ToOfficeTime(p.ClockIn.Value) : null;
+            DateTimeOffset? officeOut = p.ClockOut.HasValue ? _hub.ToOfficeTime(p.ClockOut.Value) : null;
             _historyGrid.Rows.Add(
-                localIn?.ToString("ddd M/d/yyyy") ?? "",
-                localIn?.ToString("h:mm tt") ?? "",
-                localOut?.ToString("h:mm tt") ?? "OPEN",
+                officeIn?.ToString("ddd M/d/yyyy") ?? "",
+                officeIn?.ToString("h:mm tt") ?? "",
+                officeOut?.ToString("h:mm tt") ?? "OPEN",
                 FormatHours(p.RawHours),
                 FormatHours(p.RoundedHours));
         }
